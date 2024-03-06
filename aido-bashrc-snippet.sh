@@ -27,6 +27,7 @@
 #
 #           - 'aido' calls the function aido_func() with the '-u' user mode switch
 #           - 'saido' calls the function aido_func() with the '-a' user mode switch
+#           - NOTE A PARAMETER HAS BEEN ADDED FOR VERBOSITY & DEBUGING - see below
 #           - <prompt> is the prompt to the LLM model requesting a bash command; additional instructions are prepended to it by the function
 #
 #       Explanation:
@@ -105,50 +106,118 @@
 # ...
 
 ### ALIASES
-# Add the following code to your .bashrc file to create the 'aido' and 'saido' aliases
-alias aido='aido_func aido -u'   # Short for "AI do!" - this alias is used to execute the AI-provided bash command as a non-root user ('-u')
-alias saido='aido_func saido -a' # Short for "Sudo AI do!" - this alias is used to execute the AI-provided bash command as root ('-a')
-# Note that the alias names are passed in as the first argument so that a bash history entry can be added for the invoking command
+#   Add the following code to your .bashrc file to create the 'aido' and 'saido' aliases:
+#    -  First parameter: the name of the alias
+#    -  Second parameter: the command to be aliased, with '-u' meaning user mode and '-a' meaning admin/sudo mode 
+#    -  Third parameter: the verbosity of the output with '-v' meaning verbose and '-n' meaning non-verbose (mainly for debugging)
+#    -  Fourth (implicit) parameter following the alias: the user's request to the LLM for a command
+#   Example:     aido create a new directory called mydir in the current directory
+#   Aliases to:  'aido_func aido -u -n create a new directory called mydir in the current directory'
+#    -   Possible response from the LLM: 'mkdir mydir'
+# Note that ALL parameters are MANADATORY and must be provided in the order given.
+# With the usual caveats, the prompt can be entered on the CLI unquoted 
+alias aido='aido_func aido -u -n'
+alias saido='aido_func saido -a -n'
 
-# ... miscellaneous .bashrc file contents
+# ... miscellaneous .bashrc file contents ...
 
 ### FUNCTION
 # Add the following code to your .bashrc file which is used by the 'aido' and 'saido' aliases
 function aido_func() {
-    local invoking_alias="$1" # The alias that invoked the function
-    shift
-    local in_str="$1" # The input string to the function (user mode switch + prompt)
 
+    # Set the Linux distribution and version to possibly improve the quality of the LLM response
+    DISTRO="Ubuntu"
+    VERSION="20.04"
+
+    # This is the prefix to be used for prompting the LLM model so that it (hopefully) just provides an appropriate bash command
+    # It should be re-engineered and optimized to get the best results from a particula LLM model
+    # This version was used with dolphin-mixtral-8x7b with good results but I'm sure improvements can be made to it with some experimentation
+    local STOCK_PRMT_PREFIX='you are an expert at using shell bash commands from a terminal CLI. I want you to provide me with the best command that will answer a question posed a little later in this prompt. But first note that I must be able to copy and paste your answer directly into the terminal without making any modifications to it.  It must be ready for me to just hit the Return key to run. So DO NOT provide me with any context or explanations and make sure your response is in plain text without any surrounding quotes or embeded markdown or backticks! If more than one bash command is needed or maybe even a small script give it all to me as single one-liner with semicolons and double ampersands as required but NO backslashes please. So here is my question which you will answer with bash command(s) all in one line: How do I'
+
+    # DO NOT CHANGE BELOW THIS LINE
+        
     # Check if the function is being run as root and exit if it is
-    #   - The function should be run as non-root so that the 'aitchat' (and ollama) package & server
-    #     can be run as configured in the user's home directory (~/.cargo/bin/aichat)
-    USER_DIR=$(pwd ~)
-    if [[ "$USER_DIR" == "/root" ]]; then
-        echo "Should not be run from root. Use -a option to have the option of executin the AI-provided bash command as root."
+    # The function should be run as non-root so that the 'aitchat' (and ollama) package & server
+    # can be run as configured in the user's home directory (~/.cargo/bin/aichat)
+    if [[ "$HOME" == *"root"* ]]; then
+        echo "ERROR: Should not be run from root. Use the -a option to have the option to execute the LLM-provided bash command as root."
         return 1
     fi
 
-    # Extract the user mode and prompt from the input string
-    #   - Only the admin user mode switch '-a' is recognized. Any arbitrary switch can be used for non-sudo mode (e.g., '-u')
-    #     but a switch must be present
-    in_str=$(echo "$in_str" | xargs)
-    local user_mode="${in_str:0:2}"
-    local user_prmt="${in_str:3}"
-    user_prmt=$(echo "$user_prmt" | xargs)
+    # Make sure at least four arguments are provided.  I say 'at least' because if the user's prompt is unquoted and contains spaces, 
+    # it will be split by the shell into multiple arguments but that's ok because it will be reassembled into a single string
+    # later on in this function
+    local args=("$@")
+    local num_args="${#args[@]}"
+    if [ $num_args -lt 4 ]; then 
+        echo "ERROR: missing arguments"
+        echo "Usage: aido_func <invoking_alias> <user_mode> <verbose_opt> <user_prmt>"
+        echo "   where: <invoking_alias> is the name of the alias or function that called this function"
+        echo "          <user_mode> is '-a' for admin mode or '-u' for user mode"
+        echo "          <verbose_opt> is '-v' for verbose output and '-n' for normal)"
+        echo "          <user_prmt> is the user's prompt for the LLM"
+        echo "   NOTE: ALL ARGUMENTS MUST BE PROVIDED AND ARE POSITION-SENSITIVE!"
+        return 1
+    fi
 
-    # Prefix that was tested for prompting 'aichat' prepended to actual user prompt
-    #   - I'm sure improvements can be made to it with some experimentation
-    local prmt="for the following prompt output only the bash command in plain text with no explanations, no surrounding quotes, and no markdown or codeblock notation. If multiple commands or scripting is required please output as a single line: how do I $user_prmt"
+    # Extract the invoking alias name, the user mode switch, and the verbosity switch from the input arguments. The switches for user mode and
+    # non-verbose output are not specifically checked; '-u' (user) and '-n' (normal) are suggested, respectively. The two switches MUST 
+    # be provided so that their parameter order/positions are filled, all in the name of avoiding more complex parsing logic!
+    # This should not be a hardship since aliases are used to call the function
+    local invoking_alias="$1"
+    shift
+    local user_mode="$1"
+    shift
+    local verbose_opt="$1"
+    shift
 
-    # Create commend to run the AI chatbot and get the suggested bash command
-    #
-    #   - Note: any leading or trailing spaces, backticks etc. are removed from the LLM output (which, despite prompt instructions to the contrary,
-    #     may be present in the output, at least with dolphin-mixtral-8x7b)
-    COMMAND=$("$USER_DIR"/.cargo/bin/aichat "$prmt")
-    COMMAND=$(echo "$COMMAND" | sed 's/^[\` ]*//;s/[\` ]*$//' | awk 'NF {if(seen) printf ";"; seen=1; printf $user_prmt}')
+    # Reassemble the user's prompt from the remaining input arguments
+    local old_ifs="$IFS"
+    IFS=' '
+    local user_prmt="$*"
+    IFS="$old_ifs"
     
-    # Adds 'sudo' to the new command if the user mode is '-a' (admin) and it is not already present
-    # Removes 'sudo' from the new command if the user mode is '-u' (user) and it is present
+    # ANSI color codes used by debug output
+    local RED='\033[1;91m'
+    local GREEN='\033[0;32m'
+    local BGREEN='\033[1;92m'
+    local NC='\033[0m'
+
+    # Determine if debug (aka verbose) output is enabled (-v); use any other value for normal operation but '-n' ("normal") is suggested
+    local debug_func=false
+    if [[ "$verbose_opt" == "-v" ]]; then
+        debug_func=true
+        echo
+        echo -e "User prompt: ${GREEN}${user_prmt}${NC}"
+        echo
+        echo -e "Stock prompt: ${GREEN}${STOCK_PRMT_PREFIX}${NC}"
+        echo
+    fi
+
+    # Create the augmented prompt by adding the user's prompt to the end of the stock prompt
+    local aug_prmt="In the context of ${DISTRO} v${VERSION}, ${STOCK_PRMT_PREFIX} ${user_prmt}?"
+    if [[ "$debug_func" == true ]]; then
+        echo
+        echo -e "Augmented user prompt: ${BGREEN}${aug_prmt}${NC}"
+        echo
+    fi
+
+    # Create the command for the aichat and execute it. Any leading or trailing spaces, backticks etc. are removed from the LLM
+    # output (which, despite prompt instructions to the contrary, may crop up in the output - at least they did with
+    # dolphin-mixtral-8x7b.  This cleansing is far from robust as implemented, but it is a start.
+    local pre_cmd="$HOME/.cargo/bin/aichat ${aug_prmt}"
+    local COMMAND=$($pre_cmd)
+    COMMAND=$(echo "$COMMAND" | sed 's/^[\` ]*//;s/[\` ]*$//' | awk 'NF {if(seen) printf ";"; seen=1; printf $aug_prmt}')
+
+    if [[ "$debug_func" == true ]]; then
+        echo
+        echo -e "Output from LLM: ${RED}${COMMAND}${NC}"
+        echo
+    fi
+
+    # Add 'sudo' to the new command if the user mode is '-a' (admin) AND it is not already present
+    # Remove 'sudo' from the new command if the user mode is '-u' (user) and it is present; note that this could break the command
+    # if it requires admin privileges
     if [[ "$user_mode" == "-a" ]]; then
         # Check if COMMAND starts with 'sudo ' and prepend 'sudo ' if not
         if [[ $COMMAND != sudo\ * ]]; then
@@ -159,17 +228,18 @@ function aido_func() {
         COMMAND="${COMMAND/#sudo /}"
     fi
 
-    # Manually construct the invoking command and add to history
-    local CMD_FOR_HISTORY="$invoking_alias $user_prmt"
+    # Manually construct the command that was used to invoke the function and add it to history so the user can go back and edit/re-issue it
+    local CMD_FOR_HISTORY="${invoking_alias} ${user_prmt}"
     history -s "$CMD_FOR_HISTORY"
 
-    # Display the bash command at the command prompt so the user is able to edit it and/or choose to execute it by hitting [Enter]
+    # Display the bash command at the command prompt so the user is able to interactively edit it in-line 
+    # and choose to execute it by hitting [Enter].  Ctrl-C (sometimes Ctrl-D) will cancel editing and prevent execution.
     read -e -p "Edit & Execute hitting [Enter]: " -i "$COMMAND" EXECUTE
 
-    # Execute the command
+    # Execute the command!
     eval "$EXECUTE"
 
-    # Add the executed command to history
+    # Add the executed command to history as well
     history -s "$EXECUTE"
 
     return 0
