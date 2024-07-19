@@ -1,6 +1,6 @@
 # "AI do!" (aido) & "sudo AI do!" (saido)
 
-Bash scripts for in-line CLI review, editing and execution of Bash commands suggested by an LLM in response to a user's requests for assistance.
+Very simple/simplistic Bash scripts for in-line CLI review, editing and execution of Bash commands suggested by an LLM in response to a user's requests for assistance.
 
 - `aido` and `saido` are Bash aliases leveraging a backing function designed to execute Bash commands that have been suggested by an LLM (Language Model) based on natural language user prompts. 
 - These tools integrate seamlessly into your `.bashrc` file, providing an in-line method to request Bash command guidance.
